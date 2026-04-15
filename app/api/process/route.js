@@ -3,7 +3,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
-const REPORT_CONTENT = `這裡貼上你的報告內容`;
+const REPORT_CONTENT = `[貼入你的報告內容]`;
 
 export async function POST(req) {
   try {
