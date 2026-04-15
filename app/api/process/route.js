@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import pdf from 'pdf-parse';
 import mammoth from 'mammoth';
+
+// 強制 Next.js 不要再編譯時預先讀取這個路由，避免 pdf-parse 的報錯
+export const dynamic = 'force-dynamic';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
@@ -16,7 +18,10 @@ export async function POST(req) {
       const bytes = await file.arrayBuffer();
       const buffer = Buffer.from(bytes);
       let extractedText = "";
+
       if (file.type === "application/pdf") {
+        // 使用動態載入 pdf-parse，避免編譯時的錯誤
+        const pdf = (await import('pdf-parse/lib/pdf-parse.js')).default;
         const data = await pdf(buffer);
         extractedText = data.text;
       } else {
@@ -26,35 +31,31 @@ export async function POST(req) {
       return NextResponse.json({ extractedText });
     } else {
       const reportText = formData.get('report') || "";
-      const questionText = formData.get('text'); // 即時錄音的文字
+      const questionText = formData.get('text');
       
       let prompt = `你是一位專業答辯幕僚。參考建議書內容：${reportText}。`;
       let result;
 
       if (file) {
-        // 處理上傳的錄音檔
         const bytes = await file.arrayBuffer();
         const audioData = { inlineData: { data: Buffer.from(bytes).toString('base64'), mimeType: file.type } };
-        // 要求 AI 同時輸出逐字稿與分析
         const audioPrompt = `${prompt}\n請先將這段音訊轉為完整的「逐字稿」，然後再根據建議書內容提供「回答建議」。請用以下格式：
         【逐字稿】：...
         【回答建議】：...`;
         result = await model.generateContent([audioPrompt, audioData]);
         const fullText = result.response.text();
-        
-        // 拆分逐字稿與建議 (簡單處理)
         const parts = fullText.split('【回答建議】：');
         return NextResponse.json({ 
           transcript: parts[0].replace('【逐字稿】：', '').trim(), 
           analysis: parts[1] || fullText 
         });
       } else {
-        // 處理即時錄音文字
         result = await model.generateContent(`${prompt}\n評審問了：${questionText}\n請依照建議書內容提供分類與回答要點。`);
         return NextResponse.json({ analysis: result.response.text(), transcript: questionText });
       }
     }
   } catch (error) {
+    console.error("Error details:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
