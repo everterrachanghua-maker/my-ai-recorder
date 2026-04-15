@@ -1,40 +1,35 @@
 import { NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// 填入你的 Google Gemini API Key
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
-// 這裡是你的報告內容 (之後可以換成更長的內容)
 const REPORT_CONTENT = `
-[請在此處貼入你的報告全文或重點摘要]
-例如：本計畫是關於智慧農業監測，預算50萬，技術採用 LoRa 傳輸...
+[在此處貼入你的報告重點，例如：本計畫是智慧農業，預算100萬...]
 `;
 
 export async function POST(req: Request) {
   try {
-    const formData = await req.formData();
-    const file = formData.get('file') as File;
+    const { text } = await req.json(); // 接收前端傳來的文字
 
-    // 1. 語音轉文字 (Whisper)
-    const transcription = await openai.audio.transcriptions.create({
-      file: file,
-      model: "whisper-1",
-    });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    const userText = transcription.text;
+    const prompt = `
+    你是一位專業的答辯幕僚。
+    參考報告內容：${REPORT_CONTENT}
+    
+    評審剛才問了：${text}
+    
+    請提供：
+    1. 問題分類（技術/商務/邏輯）
+    2. 根據報告內容，給出 2-3 個回答重點建議。
+    `;
 
-    // 2. 根據報告內容進行分類與解答建議
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: `你是一位答辯幕僚。參考報告內容：${REPORT_CONTENT}` },
-        { role: "user", content: `評審剛才問了：${userText}。請提供：1.問題分類 2.回答要點建議。` }
-      ],
-    });
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const analysis = response.text();
 
-    return NextResponse.json({
-      text: userText,
-      analysis: completion.choices[0].message.content
-    });
+    return NextResponse.json({ analysis });
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
