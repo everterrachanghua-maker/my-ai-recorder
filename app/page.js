@@ -1,9 +1,24 @@
 "use client";
 import { useState, useEffect } from 'react';
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, addDoc, onSnapshot, doc, updateDoc, arrayUnion, query, orderBy } from "firebase/firestore";
 
-export default function ProjectManager() {
-  const [projects, setProjects] = useState([]); // 所有專案
-  const [currentProjectId, setCurrentProjectId] = useState(null); // 目前選中的專案 ID
+// Firebase 配置 (會從環境變數讀取)
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+export default function FirebaseProjectManager() {
+  const [projects, setProjects] = useState([]);
+  const [currentProjectId, setCurrentProjectId] = useState(null);
   const [newProjectName, setNewProjectName] = useState('');
   
   const [isListening, setIsListening] = useState(false);
@@ -12,13 +27,13 @@ export default function ProjectManager() {
   const [loading, setLoading] = useState(false);
   const [recognition, setRecognition] = useState(null);
 
-  // 1. 初始化：從瀏覽器讀取舊專案
+  // 1. 即時監聽雲端資料庫
   useEffect(() => {
-    const savedProjects = localStorage.getItem('ai_projects');
-    if (savedProjects) {
-      const parsed = JSON.parse(savedProjects);
-      setProjects(parsed);
-    }
+    const q = query(collection(db, "projects"), orderBy("createdAt", "desc"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const projs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setProjects(projs);
+    });
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition) {
@@ -32,55 +47,39 @@ export default function ProjectManager() {
       rec.onend = () => setIsListening(false);
       setRecognition(rec);
     }
+    return () => unsubscribe();
   }, []);
-
-  // 2. 儲存專案到 LocalStorage
-  useEffect(() => {
-    if (projects.length > 0) {
-      localStorage.setItem('ai_projects', JSON.stringify(projects));
-    }
-  }, [projects]);
 
   const currentProject = projects.find(p => p.id === currentProjectId);
 
-  // 新增專案
-  const createProject = () => {
+  // 2. 雲端新增專案
+  const createProject = async () => {
     if (!newProjectName) return;
-    const newProj = {
-      id: Date.now(),
+    await addDoc(collection(db, "projects"), {
       name: newProjectName,
       reportContent: '',
-      history: []
-    };
-    setProjects([...projects, newProj]);
-    setCurrentProjectId(newProj.id);
+      history: [],
+      createdAt: Date.now()
+    });
     setNewProjectName('');
   };
 
-  // 更新目前專案的報告內容
-  const updateReport = (val) => {
-    const updated = projects.map(p => 
-      p.id === currentProjectId ? { ...p, reportContent: val } : p
-    );
-    setProjects(updated);
+  // 3. 雲端更新報告內容
+  const updateReport = async (val) => {
+    const projectRef = doc(db, "projects", currentProjectId);
+    await updateDoc(projectRef, { reportContent: val });
   };
 
-  // 處理 AI 分析結果並存入歷史紀錄
-  const saveToHistory = (q, a) => {
-    const updated = projects.map(p => {
-      if (p.id === currentProjectId) {
-        return { 
-          ...p, 
-          history: [{ q, a, time: new Date().toLocaleString() }, ...p.history] 
-        };
-      }
-      return p;
+  // 4. 儲存 AI 建議到雲端歷史紀錄
+  const saveToHistory = async (q, a) => {
+    const projectRef = doc(db, "projects", currentProjectId);
+    await updateDoc(projectRef, {
+      history: arrayUnion({ q, a, time: new Date().toLocaleString() })
     });
-    setProjects(updated);
   };
 
   const sendToAI = async (text) => {
-    if (!currentProject.reportContent) { alert("請先輸入報告內容！"); return; }
+    if (!currentProject.reportContent) { alert("請先貼入報告內容！"); return; }
     setLoading(true);
     const res = await fetch('/api/process', {
       method: 'POST',
@@ -89,11 +88,10 @@ export default function ProjectManager() {
     });
     const data = await res.json();
     setAnalysis(data.analysis);
-    saveToHistory(text, data.analysis);
+    await saveToHistory(text, data.analysis);
     setLoading(false);
   };
 
-  // 處理檔案上傳分析
   const handleAudioUpload = async (e) => {
     const file = e.target.files[0];
     if (!file || !currentProject.reportContent) return;
@@ -104,86 +102,49 @@ export default function ProjectManager() {
     const res = await fetch('/api/process', { method: 'POST', body: formData });
     const data = await res.json();
     setAnalysis(data.analysis);
-    saveToHistory(`檔案上傳: ${file.name}`, data.analysis);
+    await saveToHistory(`上傳檔案: ${file.name}`, data.analysis);
     setLoading(false);
   };
 
-  // 回到首頁（專案清單）
   if (!currentProjectId) {
     return (
       <div style={{ padding: '40px', maxWidth: '600px', margin: 'auto', fontFamily: 'sans-serif' }}>
-        <h1>📁 我的答辯專案管理</h1>
+        <h1>☁️ 雲端 AI 答辯管理系統</h1>
         <div style={{ display: 'flex', gap: '10px', marginBottom: '30px' }}>
-          <input 
-            placeholder="輸入新專案名稱..." 
-            value={newProjectName}
-            onChange={(e) => setNewProjectName(e.target.value)}
-            style={{ flex: 1, padding: '10px' }}
-          />
-          <button onClick={createProject} style={{ padding: '10px 20px', background: '#228be6', color: 'white', border: 'none', borderRadius: '5px' }}>建立專案</button>
+          <input placeholder="新專案名稱..." value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} style={{ flex: 1, padding: '10px' }} />
+          <button onClick={createProject} style={{ padding: '10px', background: '#228be6', color: 'white', border: 'none' }}>建立專案</button>
         </div>
-        <h3>既有專案：</h3>
         {projects.map(p => (
-          <div 
-            key={p.id} 
-            onClick={() => setCurrentProjectId(p.id)}
-            style={{ padding: '20px', border: '1px solid #ddd', borderRadius: '10px', marginBottom: '10px', cursor: 'pointer', background: '#f8f9fa' }}
-          >
+          <div key={p.id} onClick={() => setCurrentProjectId(p.id)} style={{ padding: '15px', border: '1px solid #ddd', marginBottom: '10px', cursor: 'pointer', borderRadius: '8px' }}>
             <strong>{p.name}</strong>
-            <div style={{ fontSize: '12px', color: '#666' }}>最後更新：{p.history[0]?.time || '無紀錄'}</div>
           </div>
         ))}
       </div>
     );
   }
 
-  // 專案內部介面
   return (
     <div style={{ padding: '20px', maxWidth: '1000px', margin: 'auto', fontFamily: 'sans-serif' }}>
-      <button onClick={() => setCurrentProjectId(null)} style={{ marginBottom: '20px' }}>← 回到專案列表</button>
+      <button onClick={() => setCurrentProjectId(null)}>← 回到清單</button>
       <h2>專案：{currentProject.name}</h2>
-      
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
         <div>
-          <section style={{ background: '#fff9db', padding: '15px', borderRadius: '10px', marginBottom: '20px' }}>
-            <h4>1. 服務建議書內容 (自動儲存)</h4>
-            <textarea 
-              style={{ width: '100%', height: '200px' }} 
-              value={currentProject.reportContent}
-              onChange={(e) => updateReport(e.target.value)}
-              placeholder="貼入此專案的報告內容..."
-            />
-          </section>
-
-          <section style={{ background: '#e7f5ff', padding: '15px', borderRadius: '10px' }}>
-            <h4>2. 即時錄音或上傳</h4>
-            <button 
-              onClick={() => isListening ? recognition.stop() : recognition.start() || setIsListening(true)}
-              style={{ width: '100%', padding: '15px', background: isListening ? 'red' : 'blue', color: 'white', border: 'none', borderRadius: '10px' }}
-            >
-              {isListening ? '🛑 停止錄音' : '🎙️ 開始錄製評審提問'}
-            </button>
-            <p>或上傳音訊檔：</p>
-            <input type="file" accept="audio/*" onChange={handleAudioUpload} />
-          </section>
+          <textarea style={{ width: '100%', height: '200px' }} value={currentProject.reportContent} onChange={(e) => updateReport(e.target.value)} placeholder="在此貼入報告內容..." />
+          <button onClick={() => isListening ? recognition.stop() : recognition.start() || setIsListening(true)} style={{ width: '100%', padding: '20px', background: isListening ? 'red' : 'blue', color: 'white', marginTop: '10px' }}>
+            {isListening ? '🛑 停止錄音' : '🎙️ 開始錄製評審提問'}
+          </button>
+          <input type="file" onChange={handleAudioUpload} style={{ marginTop: '10px' }} />
         </div>
-
-        <div>
-          <section style={{ background: '#f8f9fa', padding: '15px', borderRadius: '10px', border: '1px solid #dee2e6', minHeight: '400px' }}>
-            <h4>💡 AI 幕僚最新建議</h4>
-            <div style={{ whiteSpace: 'pre-wrap', color: '#0b7285' }}>
-              {loading ? "AI 正在翻閱報告..." : analysis || "等待提問中..."}
+        <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '10px' }}>
+          <h4>💡 AI 分析</h4>
+          <div style={{ whiteSpace: 'pre-wrap' }}>{loading ? "分析中..." : analysis}</div>
+          <hr />
+          <h4>📜 歷史提問記錄</h4>
+          {currentProject.history?.slice().reverse().map((h, i) => (
+            <div key={i} style={{ fontSize: '12px', borderBottom: '1px solid #eee', padding: '5px' }}>
+              <strong>{h.q}</strong>
             </div>
-            <hr />
-            <h4>📜 此專案歷史紀錄</h4>
-            {currentProject.history.map((h, i) => (
-              <div key={i} style={{ fontSize: '13px', borderBottom: '1px solid #eee', padding: '10px 0' }}>
-                <div style={{ color: '#666' }}>{h.time}</div>
-                <strong>問：{h.q}</strong>
-                <div style={{ color: '#333' }}>答：{h.a.substring(0, 50)}...</div>
-              </div>
-            ))}
-          </section>
+          ))}
         </div>
       </div>
     </div>
