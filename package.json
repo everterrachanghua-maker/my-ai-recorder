@@ -1,6 +1,6 @@
 {
   "name": "my-ai-recorder",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -13,6 +13,8 @@
     "react-dom": "18.2.0",
     "@google/generative-ai": "0.11.1",
     "firebase": "10.11.1",
-    "lucide-react": "latest"
+    "lucide-react": "latest",
+    "pdf-parse": "1.1.1",
+    "mammoth": "1.7.1"
   }
 }
