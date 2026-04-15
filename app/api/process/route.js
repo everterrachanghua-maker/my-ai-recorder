@@ -1,69 +1,57 @@
-import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { StreamingTextResponse, GoogleGenerativeAIStream } from "ai"; // 需要安裝 ai 套件
 import mammoth from 'mammoth';
 
 export const dynamic = 'force-dynamic';
-
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
 export async function POST(req) {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const formData = await req.formData();
     const type = formData.get('type');
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
     if (type === 'report') {
-      // --- 處理多個報告書上傳 ---
-      const files = formData.getAll('file'); // 取得所有檔案
+      // --- 檔案處理部分保持不變 (PDF/Word 提取文字) ---
+      const files = formData.getAll('file');
       let combinedText = "";
-      let fileNames = [];
-
       for (const file of files) {
         const bytes = await file.arrayBuffer();
         const buffer = Buffer.from(bytes);
-        let text = "";
-
         if (file.type === "application/pdf") {
           const pdf = (await import('pdf-parse/lib/pdf-parse.js')).default;
           const data = await pdf(buffer);
-          text = data.text;
-        } else if (file.type.includes("word") || file.name.endsWith(".docx")) {
+          combinedText += data.text;
+        } else {
           const result = await mammoth.extractRawText({ buffer });
-          text = result.value;
+          combinedText += result.value;
         }
-        
-        combinedText += `\n--- 檔案名稱: ${file.name} ---\n${text}\n`;
-        fileNames.push(file.name);
       }
+      return new Response(JSON.stringify({ extractedText: combinedText }), { status: 200 });
+    } 
 
-      return NextResponse.json({ extractedText: combinedText, fileNames });
+    // --- 核心：AI 串流分析邏輯 ---
+    const reportText = formData.get('report') || "";
+    const questionText = formData.get('text');
+    const audioFile = formData.get('file');
 
+    const systemPrompt = `你是一位專業答辯幕僚。請參考建議書內容：${reportText}。
+    針對評審提問，請先給出【問題分類】，再給出【回答要點】。`;
+
+    let result;
+    if (audioFile) {
+      const bytes = await audioFile.arrayBuffer();
+      const audioData = { inlineData: { data: Buffer.from(bytes).toString('base64'), mimeType: audioFile.type } };
+      result = await model.generateContentStream([systemPrompt, audioData]);
     } else {
-      // --- 處理錄音與分析 (保持不變) ---
-      const reportText = formData.get('report') || "";
-      const questionText = formData.get('text');
-      const file = formData.get('file');
-      
-      let prompt = `你是一位專業答辯幕僚。參考建議書內容：${reportText}。`;
-      
-      if (file) {
-        const bytes = await file.arrayBuffer();
-        const audioData = { inlineData: { data: Buffer.from(bytes).toString('base64'), mimeType: file.type } };
-        const audioPrompt = `${prompt}\n請先將這段音訊轉為完整的「逐字稿」，然後再根據建議書內容提供「回答建議」。請用以下格式：\n【逐字稿】：...\n【回答建議】：...`;
-        const result = await model.generateContent([audioPrompt, audioData]);
-        const fullText = result.response.text();
-        const parts = fullText.split('【回答建議】：');
-        return NextResponse.json({ 
-          transcript: parts[0].replace('【逐字稿】：', '').trim(), 
-          analysis: parts[1] || fullText 
-        });
-      } else {
-        const result = await model.generateContent(`${prompt}\n評審問了：${questionText}\n請提供回答要點。`);
-        return NextResponse.json({ analysis: result.response.text(), transcript: questionText });
-      }
+      result = await model.generateContentStream(`${systemPrompt}\n評審問：${questionText}`);
     }
+
+    // 將 Gemini 的串流轉換為 Vercel 支援的串流格式
+    const stream = GoogleGenerativeAIStream(result);
+    return new StreamingTextResponse(stream);
+
   } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return new Response(JSON.stringify({ error: error.message }), { status: 500 });
   }
 }
