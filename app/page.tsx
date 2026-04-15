@@ -1,63 +1,77 @@
 "use client";
-import { useState, useRef } from 'react';
+import { useState, useEffect } from 'react';
 
 export default function RecorderPage() {
-  const [isRecording, setIsRecording] = useState(false);
-  const [result, setResult] = useState({ text: '', analysis: '' });
+  const [isListening, setIsListening] = useState(false);
+  const [transcript, setTranscript] = useState('');
+  const [analysis, setAnalysis] = useState('');
   const [loading, setLoading] = useState(false);
-  const mediaRecorderRef = useRef(null);
 
-  const startRecording = async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mediaRecorder = new MediaRecorder(stream);
-    mediaRecorderRef.current = mediaRecorder;
-    const chunks = [];
+  // 設置瀏覽器語音辨識
+  const [recognition, setRecognition] = useState(null);
 
-    mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
-    mediaRecorder.onstop = async () => {
-      const blob = new Blob(chunks, { type: 'audio/webm' });
-      sendToAI(blob);
-    };
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const rec = new SpeechRecognition();
+      rec.lang = 'zh-TW';
+      rec.continuous = false;
+      rec.onresult = (event) => {
+        const text = event.results[0][0].transcript;
+        setTranscript(text);
+        sendToGemini(text);
+      };
+      rec.onend = () => setIsListening(false);
+      setRecognition(rec);
+    }
+  }, []);
 
-    mediaRecorder.start();
-    setIsRecording(true);
+  const toggleListen = () => {
+    if (isListening) {
+      recognition.stop();
+    } else {
+      setTranscript('正在聆聽...');
+      setAnalysis('');
+      recognition.start();
+      setIsListening(true);
+    }
   };
 
-  const stopRecording = () => {
-    mediaRecorderRef.current.stop();
-    setIsRecording(false);
-  };
-
-  const sendToAI = async (blob) => {
+  const sendToGemini = async (text) => {
     setLoading(true);
-    const formData = new FormData();
-    formData.append('file', blob, 'audio.webm');
-
-    const res = await fetch('/api/process', { method: 'POST', body: formData });
+    const res = await fetch('/api/process', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
     const data = await res.json();
-    setResult(data);
+    setAnalysis(data.analysis);
     setLoading(false);
   };
 
   return (
     <div style={{ padding: '20px', fontFamily: 'sans-serif', maxWidth: '600px', margin: 'auto' }}>
-      <h1>🎤 答辯即時助手</h1>
+      <h1>🎤 答辯即時助手 (Gemini 版)</h1>
       <button 
-        onMouseDown={startRecording} 
-        onMouseUp={stopRecording}
-        style={{ padding: '20px', fontSize: '20px', background: isRecording ? 'red' : 'blue', color: 'white', borderRadius: '10px', width: '100%' }}
+        onClick={toggleListen}
+        style={{ 
+          padding: '20px', fontSize: '20px', width: '100%', borderRadius: '15px',
+          background: isListening ? '#ff4d4d' : '#0070f3', color: 'white', border: 'none'
+        }}
       >
-        {isRecording ? '正在聽評審提問 (放開結束)...' : '長按錄製評審提問'}
+        {isListening ? '🛑 停止聆聽' : '🎙️ 開始錄製評審提問'}
       </button>
 
-      {loading && <p>AI 正在思考中...</p>}
+      <div style={{ marginTop: '30px' }}>
+        <h3 style={{ color: '#666' }}>評審提問內容：</h3>
+        <div style={{ padding: '15px', background: '#f5f5f5', borderRadius: '10px' }}>
+          {transcript || "尚未開始錄音..."}
+        </div>
 
-      <div style={{ marginTop: '20px', borderTop: '1px solid #ccc' }}>
-        <h3>逐字稿：</h3>
-        <p style={{ background: '#f0f0f0', padding: '10px' }}>{result.text}</p>
-        
-        <h3>幕僚建議：</h3>
-        <pre style={{ whiteSpace: 'pre-wrap', background: '#eef', padding: '10px' }}>{result.analysis}</pre>
+        <h3 style={{ color: '#666', marginTop: '20px' }}>💡 幕僚建議回答：</h3>
+        <div style={{ padding: '15px', background: '#eef6ff', borderRadius: '10px', minHeight: '100px' }}>
+          {loading ? "AI 思考中..." : analysis || "等待提問中..."}
+        </div>
       </div>
     </div>
   );
