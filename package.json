@@ -1,7 +1,6 @@
 {
   "name": "my-ai-recorder",
   "version": "0.1.0",
-  "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -11,11 +10,6 @@
     "next": "14.2.3",
     "react": "18.2.0",
     "react-dom": "18.2.0",
-    "@google/generative-ai": "latest",
-    "lucide-react": "latest",
-    "typescript": "5.4.5",
-    "@types/node": "20.12.12",
-    "@types/react": "18.3.3",
-    "@types/react-dom": "18.3.0"
+    "@google/generative-ai": "latest"
   }
 }
