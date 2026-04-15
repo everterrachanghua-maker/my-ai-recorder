@@ -1,115 +1,189 @@
 "use client";
 import { useState, useEffect } from 'react';
 
-export default function RecorderPage() {
-  const [reportContent, setReportContent] = useState(''); // 儲存報告書內容
+export default function ProjectManager() {
+  const [projects, setProjects] = useState([]); // 所有專案
+  const [currentProjectId, setCurrentProjectId] = useState(null); // 目前選中的專案 ID
+  const [newProjectName, setNewProjectName] = useState('');
+  
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [analysis, setAnalysis] = useState('');
   const [loading, setLoading] = useState(false);
   const [recognition, setRecognition] = useState(null);
 
+  // 1. 初始化：從瀏覽器讀取舊專案
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        const rec = new SpeechRecognition();
-        rec.lang = 'zh-TW';
-        rec.onresult = (event) => {
-          const text = event.results[0][0].transcript;
-          setTranscript(text);
-          sendToAI(text);
-        };
-        rec.onend = () => setIsListening(false);
-        setRecognition(rec);
-      }
+    const savedProjects = localStorage.getItem('ai_projects');
+    if (savedProjects) {
+      const parsed = JSON.parse(savedProjects);
+      setProjects(parsed);
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const rec = new SpeechRecognition();
+      rec.lang = 'zh-TW';
+      rec.onresult = (event) => {
+        const text = event.results[0][0].transcript;
+        setTranscript(text);
+        sendToAI(text);
+      };
+      rec.onend = () => setIsListening(false);
+      setRecognition(rec);
     }
   }, []);
 
-  // 1. 即時錄音發送
-  const toggleListen = () => {
-    if (!reportContent) { alert("請先在下方貼入『服務建議書』內容！"); return; }
-    if (isListening) { recognition.stop(); } 
-    else { setTranscript('正在聽...'); setAnalysis(''); recognition.start(); setIsListening(true); }
-  };
-
-  // 2. 錄音檔上傳分析
-  const handleAudioUpload = async (e) => {
-    if (!reportContent) { alert("請先貼入『服務建議書』內容！"); return; }
-    const file = e.target.files[0];
-    if (!file) return;
-    
-    setLoading(true);
-    setTranscript(`正在處理音訊檔案...`);
-    
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('report', reportContent); // 把報告書也傳過去
-
-    try {
-      const res = await fetch('/api/process', { method: 'POST', body: formData });
-      const data = await res.json();
-      setAnalysis(data.analysis);
-      setTranscript("（音訊檔案分析完成）");
-    } catch (err) {
-      setAnalysis("音訊處理失敗，請確認檔案格式。");
+  // 2. 儲存專案到 LocalStorage
+  useEffect(() => {
+    if (projects.length > 0) {
+      localStorage.setItem('ai_projects', JSON.stringify(projects));
     }
-    setLoading(false);
+  }, [projects]);
+
+  const currentProject = projects.find(p => p.id === currentProjectId);
+
+  // 新增專案
+  const createProject = () => {
+    if (!newProjectName) return;
+    const newProj = {
+      id: Date.now(),
+      name: newProjectName,
+      reportContent: '',
+      history: []
+    };
+    setProjects([...projects, newProj]);
+    setCurrentProjectId(newProj.id);
+    setNewProjectName('');
   };
 
-  // 3. 傳送文字給 AI
+  // 更新目前專案的報告內容
+  const updateReport = (val) => {
+    const updated = projects.map(p => 
+      p.id === currentProjectId ? { ...p, reportContent: val } : p
+    );
+    setProjects(updated);
+  };
+
+  // 處理 AI 分析結果並存入歷史紀錄
+  const saveToHistory = (q, a) => {
+    const updated = projects.map(p => {
+      if (p.id === currentProjectId) {
+        return { 
+          ...p, 
+          history: [{ q, a, time: new Date().toLocaleString() }, ...p.history] 
+        };
+      }
+      return p;
+    });
+    setProjects(updated);
+  };
+
   const sendToAI = async (text) => {
+    if (!currentProject.reportContent) { alert("請先輸入報告內容！"); return; }
     setLoading(true);
     const res = await fetch('/api/process', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, report: reportContent }) // 傳送提問與報告
+      body: JSON.stringify({ text, report: currentProject.reportContent })
     });
     const data = await res.json();
     setAnalysis(data.analysis);
+    saveToHistory(text, data.analysis);
     setLoading(false);
   };
 
-  return (
-    <div style={{ padding: '20px', maxWidth: '900px', margin: 'auto', fontFamily: 'sans-serif', backgroundColor: '#fff', minHeight: '100vh' }}>
-      <h1 style={{ textAlign: 'center', color: '#333' }}>🎤 AI 答辯幕僚系統</h1>
-      
-      {/* 步驟一：報告書準備 */}
-      <div style={{ background: '#fff9db', padding: '20px', borderRadius: '15px', marginBottom: '20px', border: '2px dashed #fcc419' }}>
-        <h3 style={{ marginTop: 0 }}>📍 第一步：貼入「服務建議書」內容</h3>
-        <textarea 
-          placeholder="請將你的服務建議書或報告重點直接貼在這裡... (AI 會根據這段內容來回答問題)"
-          style={{ width: '100%', height: '150px', padding: '10px', borderRadius: '8px', border: '1px solid #ddd' }}
-          value={reportContent}
-          onChange={(e) => setReportContent(e.target.value)}
-        />
-        <p style={{ fontSize: '12px', color: '#666' }}>💡 提示：貼入的內容越詳細，AI 的建議會越精準。</p>
+  // 處理檔案上傳分析
+  const handleAudioUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !currentProject.reportContent) return;
+    setLoading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('report', currentProject.reportContent);
+    const res = await fetch('/api/process', { method: 'POST', body: formData });
+    const data = await res.json();
+    setAnalysis(data.analysis);
+    saveToHistory(`檔案上傳: ${file.name}`, data.analysis);
+    setLoading(false);
+  };
+
+  // 回到首頁（專案清單）
+  if (!currentProjectId) {
+    return (
+      <div style={{ padding: '40px', maxWidth: '600px', margin: 'auto', fontFamily: 'sans-serif' }}>
+        <h1>📁 我的答辯專案管理</h1>
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '30px' }}>
+          <input 
+            placeholder="輸入新專案名稱..." 
+            value={newProjectName}
+            onChange={(e) => setNewProjectName(e.target.value)}
+            style={{ flex: 1, padding: '10px' }}
+          />
+          <button onClick={createProject} style={{ padding: '10px 20px', background: '#228be6', color: 'white', border: 'none', borderRadius: '5px' }}>建立專案</button>
+        </div>
+        <h3>既有專案：</h3>
+        {projects.map(p => (
+          <div 
+            key={p.id} 
+            onClick={() => setCurrentProjectId(p.id)}
+            style={{ padding: '20px', border: '1px solid #ddd', borderRadius: '10px', marginBottom: '10px', cursor: 'pointer', background: '#f8f9fa' }}
+          >
+            <strong>{p.name}</strong>
+            <div style={{ fontSize: '12px', color: '#666' }}>最後更新：{p.history[0]?.time || '無紀錄'}</div>
+          </div>
+        ))}
       </div>
+    );
+  }
 
+  // 專案內部介面
+  return (
+    <div style={{ padding: '20px', maxWidth: '1000px', margin: 'auto', fontFamily: 'sans-serif' }}>
+      <button onClick={() => setCurrentProjectId(null)} style={{ marginBottom: '20px' }}>← 回到專案列表</button>
+      <h2>專案：{currentProject.name}</h2>
+      
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-        {/* 左側：輸入提問 */}
         <div>
-          <div style={{ background: '#e7f5ff', padding: '20px', borderRadius: '15px', marginBottom: '20px' }}>
-            <h4>🎙️ 方法 A：現場錄音</h4>
-            <button onClick={toggleListen} style={{ padding: '15px', width: '100%', background: isListening ? '#fa5252' : '#228be6', color: 'white', border: 'none', borderRadius: '10px', fontSize: '16px', cursor: 'pointer' }}>
-              {isListening ? '🛑 停止聆聽' : '開始錄製評審提問'}
-            </button>
-          </div>
+          <section style={{ background: '#fff9db', padding: '15px', borderRadius: '10px', marginBottom: '20px' }}>
+            <h4>1. 服務建議書內容 (自動儲存)</h4>
+            <textarea 
+              style={{ width: '100%', height: '200px' }} 
+              value={currentProject.reportContent}
+              onChange={(e) => updateReport(e.target.value)}
+              placeholder="貼入此專案的報告內容..."
+            />
+          </section>
 
-          <div style={{ background: '#f4fce3', padding: '20px', borderRadius: '15px' }}>
-            <h4>📁 方法 B：上傳錄音檔</h4>
+          <section style={{ background: '#e7f5ff', padding: '15px', borderRadius: '10px' }}>
+            <h4>2. 即時錄音或上傳</h4>
+            <button 
+              onClick={() => isListening ? recognition.stop() : recognition.start() || setIsListening(true)}
+              style={{ width: '100%', padding: '15px', background: isListening ? 'red' : 'blue', color: 'white', border: 'none', borderRadius: '10px' }}
+            >
+              {isListening ? '🛑 停止錄音' : '🎙️ 開始錄製評審提問'}
+            </button>
+            <p>或上傳音訊檔：</p>
             <input type="file" accept="audio/*" onChange={handleAudioUpload} />
-          </div>
+          </section>
         </div>
 
-        {/* 右側：結果顯示 */}
-        <div style={{ background: '#f8f9fa', padding: '20px', borderRadius: '15px', border: '1px solid #dee2e6' }}>
-          <h4>💡 AI 幕僚建議 (參考建議書分析)</h4>
-          <p style={{ color: '#666', fontSize: '14px' }}><b>提問逐字稿：</b> {transcript || "尚未開始..."}</p>
-          <hr />
-          <div style={{ whiteSpace: 'pre-wrap', color: '#0b7285', fontWeight: '500', lineHeight: '1.6' }}>
-            {loading ? "AI 幕僚正在翻閱建議書..." : analysis || "等待分析中..."}
-          </div>
+        <div>
+          <section style={{ background: '#f8f9fa', padding: '15px', borderRadius: '10px', border: '1px solid #dee2e6', minHeight: '400px' }}>
+            <h4>💡 AI 幕僚最新建議</h4>
+            <div style={{ whiteSpace: 'pre-wrap', color: '#0b7285' }}>
+              {loading ? "AI 正在翻閱報告..." : analysis || "等待提問中..."}
+            </div>
+            <hr />
+            <h4>📜 此專案歷史紀錄</h4>
+            {currentProject.history.map((h, i) => (
+              <div key={i} style={{ fontSize: '13px', borderBottom: '1px solid #eee', padding: '10px 0' }}>
+                <div style={{ color: '#666' }}>{h.time}</div>
+                <strong>問：{h.q}</strong>
+                <div style={{ color: '#333' }}>答：{h.a.substring(0, 50)}...</div>
+              </div>
+            ))}
+          </section>
         </div>
       </div>
     </div>
